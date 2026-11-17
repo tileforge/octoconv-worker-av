@@ -189,7 +189,7 @@ func TestConvertExtractsAudioAndThumb(t *testing.T) {
 	if err := c.Convert(context.Background(), filepath.Join(dir, "in.mp4"), filepath.Join(dir, "out.m4a"), nil); err != nil {
 		t.Fatal(err)
 	}
-	if !containsArg(ffmpeg, "-c:a", "copy") || !hasFlag(ffmpeg, "-vn") {
+	if !containsArg(ffmpeg, "-c:a", "copy") || !hasFlag(ffmpeg, "-vn") || !containsArg(ffmpeg, "-map", "0:a:0") {
 		t.Fatalf("m4a %v", ffmpeg)
 	}
 

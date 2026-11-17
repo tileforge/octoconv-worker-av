@@ -334,7 +334,8 @@ func transcodeArgs(inPath, outPath, target string, videoIndex, threads int) []st
 }
 
 func extractAudioArgs(inPath, outPath, target string, streamCopy bool) []string {
-	args := append(avInputArgs(inPath), "-vn")
+	// ffmpeg's automatic selection picks the audio stream with the most channels, not a:0.
+	args := append(avInputArgs(inPath), "-map", "0:a:0", "-vn")
 	if streamCopy {
 		args = append(args, "-c:a", "copy")
 	} else {
