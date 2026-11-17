@@ -1,0 +1,50 @@
+{
+  "capabilities": [
+    {
+      "id": "octoconv.convert.av",
+      "version": 1,
+      "legacy": {"operation": "convert", "engine": "av"},
+      "client_operation": "convert",
+      "inputs": [{"role": "source", "min": 1, "max": 1}],
+      "outputs": [{"role": "primary", "min": 1, "max": 1}],
+      "parameter_schema": {},
+      "formats": [
+        {"from": "mov", "to": "mp4"},
+        {"from": "avi", "to": "mp4"},
+        {"from": "mkv", "to": "mp4"},
+        {"from": "webm", "to": "mp4"},
+        {"from": "mp4", "to": "webm"},
+        {"from": "mp4", "to": "mp3"},
+        {"from": "mp4", "to": "wav"},
+        {"from": "mp4", "to": "m4a"},
+        {"from": "mov", "to": "mp3"},
+        {"from": "mov", "to": "wav"},
+        {"from": "mov", "to": "m4a"},
+        {"from": "avi", "to": "mp3"},
+        {"from": "avi", "to": "wav"},
+        {"from": "avi", "to": "m4a"},
+        {"from": "mkv", "to": "mp3"},
+        {"from": "mkv", "to": "wav"},
+        {"from": "mkv", "to": "m4a"},
+        {"from": "webm", "to": "mp3"},
+        {"from": "webm", "to": "wav"},
+        {"from": "webm", "to": "m4a"},
+        {"from": "mp4", "to": "jpg"},
+        {"from": "mp4", "to": "png"},
+        {"from": "mp4", "to": "webp"},
+        {"from": "mov", "to": "jpg"},
+        {"from": "mov", "to": "png"},
+        {"from": "mov", "to": "webp"},
+        {"from": "avi", "to": "jpg"},
+        {"from": "avi", "to": "png"},
+        {"from": "avi", "to": "webp"},
+        {"from": "mkv", "to": "jpg"},
+        {"from": "mkv", "to": "png"},
+        {"from": "mkv", "to": "webp"},
+        {"from": "webm", "to": "jpg"},
+        {"from": "webm", "to": "png"},
+        {"from": "webm", "to": "webp"}
+      ]
+    }
+  ]
+}
