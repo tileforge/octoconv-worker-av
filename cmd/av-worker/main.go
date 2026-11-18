@@ -1,4 +1,4 @@
-// Command av-worker runs one approved av capability over Worker Protocol v1.
+// Command av-worker runs one approved av capability over Worker Protocol v2.
 package main
 
 import (

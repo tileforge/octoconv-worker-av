@@ -90,21 +90,76 @@ func TestProbeArgsUseFileProtocol(t *testing.T) {
 	}
 }
 
-func TestConvertRejectsOptionsBeforeExec(t *testing.T) {
+func TestParameterSchema(t *testing.T) {
+	raw, err := os.ReadFile(filepath.Join("..", "..", "schema", "manifest-av-convert.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var doc struct {
+		Capabilities []struct {
+			Schema map[string]any `json:"parameter_schema"`
+		} `json:"capabilities"`
+	}
+	if err := json.Unmarshal(raw, &doc); err != nil {
+		t.Fatal(err)
+	}
+	schema := doc.Capabilities[0].Schema
+	if schema["type"] != "object" || schema["additionalProperties"] != false || len(schema) != 3 {
+		t.Fatalf("schema %+v", schema)
+	}
+	props, ok := schema["properties"].(map[string]any)
+	if !ok || len(props) != 3 {
+		t.Fatalf("properties %+v", schema["properties"])
+	}
+	timecode, _ := props["timecode"].(map[string]any)
+	if timecode["type"] != "number" || timecode["minimum"] != float64(0) || len(timecode) != 2 {
+		t.Fatalf("timecode %+v", timecode)
+	}
+	height, _ := props["resolution_height"].(map[string]any)
+	enum, _ := height["enum"].([]any)
+	if height["type"] != "integer" || len(height) != 2 || len(enum) != 3 || enum[0] != float64(480) || enum[1] != float64(720) || enum[2] != float64(1080) {
+		t.Fatalf("resolution_height %+v", height)
+	}
+	codec, _ := props["codec"].(map[string]any)
+	codecs, _ := codec["enum"].([]any)
+	if codec["type"] != "string" || len(codec) != 2 || len(codecs) != 2 || codecs[0] != "h264" || codecs[1] != "hevc" {
+		t.Fatalf("codec %+v", codec)
+	}
+}
+
+func TestConvertRejectsIllegalOptionsBeforeExec(t *testing.T) {
 	called := false
 	c := AVConverter{run: func(context.Context, string, ...string) ([]byte, error) {
 		called = true
 		return nil, nil
 	}}
 	for _, opts := range []map[string]any{
-		{"timecode": 0.0},
-		{"resolution_height": 720},
-		{"codec": "h264"},
+		{"timecode": 1.0},
+		{"timecode": -1.0},
+		{"timecode": "0"},
+		{"resolution_height": 144},
+		{"resolution_height": 720.5},
+		{"resolution_height": "720"},
+		{"codec": "vp9"},
+		{"codec": ""},
+		{"page_size": "a4"},
 	} {
 		err := c.Convert(context.Background(), "in.mp4", filepath.Join(t.TempDir(), "out.mp4"), opts)
 		if err == nil || !strings.Contains(err.Error(), "unsupported option") {
 			t.Fatalf("opts %v err %v", opts, err)
 		}
+	}
+	err := c.Convert(context.Background(), "in.mp4", filepath.Join(t.TempDir(), "out.jpg"), map[string]any{"resolution_height": 720})
+	if err == nil || !strings.Contains(err.Error(), "unsupported option") {
+		t.Fatal(err)
+	}
+	err = c.Convert(context.Background(), "in.mp4", filepath.Join(t.TempDir(), "out.webm"), map[string]any{"codec": "hevc"})
+	if err == nil || !strings.Contains(err.Error(), "unsupported option") {
+		t.Fatal(err)
+	}
+	err = c.Convert(context.Background(), "in.mp4", filepath.Join(t.TempDir(), "out.mp3"), map[string]any{"timecode": 0})
+	if err == nil || !strings.Contains(err.Error(), "unsupported option") {
+		t.Fatal(err)
 	}
 	if called {
 		t.Fatal("exec ran")
@@ -222,6 +277,72 @@ func TestConvertExtractsAudioAndThumb(t *testing.T) {
 	}
 	if !containsArg(ffmpeg, "-c:v", "mjpeg") {
 		t.Fatalf("jpg %v", ffmpeg)
+	}
+}
+
+func TestConvertHonorsTimecodeResolutionAndCodec(t *testing.T) {
+	dir := t.TempDir()
+	var ffmpeg []string
+	c := AVConverter{
+		threads: 2,
+		run:     scripted(t, "2.0", "h264", "aac", 320, 240, &ffmpeg),
+	}
+	if err := c.Convert(context.Background(), filepath.Join(dir, "in.mp4"), filepath.Join(dir, "out.jpg"), map[string]any{"timecode": 0.0}); err != nil {
+		t.Fatal(err)
+	}
+	if !containsArg(ffmpeg, "-ss", "0") {
+		t.Fatalf("seek %v", ffmpeg)
+	}
+
+	ffmpeg = nil
+	c.run = scripted(t, "2.0", "h264", "aac", 320, 240, &ffmpeg)
+	if err := c.Convert(context.Background(), filepath.Join(dir, "in.mov"), filepath.Join(dir, "out.mp4"), map[string]any{"resolution_height": float64(720), "codec": "h264"}); err != nil {
+		t.Fatal(err)
+	}
+	if containsArg(ffmpeg, "-c", "copy") || !containsArg(ffmpeg, "-vf", "scale=-2:720") || !containsArg(ffmpeg, "-c:v", "libx264") || !containsArg(ffmpeg, "-crf", "23") {
+		t.Fatalf("scale args %v", ffmpeg)
+	}
+
+	ffmpeg = nil
+	c.run = scripted(t, "2.0", "h264", "aac", 320, 240, &ffmpeg)
+	if err := c.Convert(context.Background(), filepath.Join(dir, "in.mov"), filepath.Join(dir, "out.mp4"), map[string]any{"codec": "hevc"}); err != nil {
+		t.Fatal(err)
+	}
+	if containsArg(ffmpeg, "-c", "copy") || !containsArg(ffmpeg, "-c:v", "libx265") || !containsArg(ffmpeg, "-crf", "28") {
+		t.Fatalf("hevc args %v", ffmpeg)
+	}
+
+	ffmpeg = nil
+	c.run = scripted(t, "2.0", "h264", "aac", 320, 240, &ffmpeg)
+	if err := c.Convert(context.Background(), filepath.Join(dir, "in.mov"), filepath.Join(dir, "out.mp4"), map[string]any{"codec": "h264"}); err != nil {
+		t.Fatal(err)
+	}
+	if !containsArg(ffmpeg, "-c", "copy") {
+		t.Fatalf("explicit h264 copy %v", ffmpeg)
+	}
+
+	ffmpeg = nil
+	c.run = scripted(t, "2.0", "vp9", "opus", 320, 240, &ffmpeg)
+	if err := c.Convert(context.Background(), filepath.Join(dir, "in.mp4"), filepath.Join(dir, "out.webm"), map[string]any{"resolution_height": float64(480)}); err != nil {
+		t.Fatal(err)
+	}
+	if !containsArg(ffmpeg, "-vf", "scale=-2:480") || !containsArg(ffmpeg, "-c:v", "libvpx-vp9") {
+		t.Fatalf("webm args %v", ffmpeg)
+	}
+
+	probes := 0
+	ffmpegCount := 0
+	c.run = func(_ context.Context, name string, args ...string) ([]byte, error) {
+		if name == "ffprobe" {
+			probes++
+			return fakeProbe(args, "2.0", "h264", "aac", 320, 240)
+		}
+		ffmpegCount++
+		return nil, fmt.Errorf("ffmpeg")
+	}
+	err := c.Convert(context.Background(), filepath.Join(dir, "in.mp4"), filepath.Join(dir, "out.png"), map[string]any{"timecode": 2.0})
+	if err == nil || probes == 0 || ffmpegCount != 0 || !strings.Contains(err.Error(), "timecode exceeds source duration") {
+		t.Fatalf("probes %d ffmpeg %d err %v", probes, ffmpegCount, err)
 	}
 }
 
