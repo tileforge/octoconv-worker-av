@@ -6,6 +6,6 @@ The process reads `AV_PROTOCOL_CORE_URL`, `AV_PROTOCOL_CLIENT_CERT`, `AV_PROTOCO
 
 `schema/manifest-av-convert.json` is capability `octoconv.convert.av`. It names the thirty-five pairs: mov, avi, mkv, and webm to mp4, then mp4 to webm, then sources mp4, mov, avi, mkv, and webm each to mp3, wav, and m4a, then those sources each to jpg, png, and webp.
 
-`ffmpeg` and `ffprobe` must be on `PATH`. `AV_THREADS` overrides the thread count passed to `ffmpeg`. The default engine budget is 753s (`AV_ENGINE_TIMEOUT`). This process does not apply Landlock. The in-repo av worker does. Do not move av jobs onto this process until that confinement is measured.
+`ffmpeg` and `ffprobe` must be on `PATH`. `AV_THREADS` overrides the thread count passed to `ffmpeg`. The default engine budget is 753s (`AV_ENGINE_TIMEOUT`). Landlock confines both programs to the job directory. `AV_SANDBOX_DISABLED=true` turns that off. A sandbox setup failure exits 78. The manifest is not approved.
 
 Parameters are `timecode`, `resolution_height`, and `codec`. An empty parameters object keeps the built-in defaults. An unknown key fails before either program runs.

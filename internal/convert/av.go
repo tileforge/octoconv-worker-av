@@ -18,10 +18,12 @@ func init() {
 }
 
 // AVConverter shells out to ffmpeg and ffprobe.
-// A zero value runs those binaries directly.
+// A zero value runs those binaries directly. WithSandbox applies Landlock.
 type AVConverter struct {
 	threads int
 	run     func(ctx context.Context, name string, args ...string) ([]byte, error)
+	sandbox *engineSandbox
+	workDir string
 }
 
 const (
@@ -92,6 +94,7 @@ func (c AVConverter) Convert(ctx context.Context, inPath, outPath string, opts m
 	if err := avApplicability(target, o); err != nil {
 		return err
 	}
+	c.workDir = filepath.Dir(outPath)
 	probeCtx, cancel := context.WithTimeout(ctx, avProbeTimeout)
 	defer cancel()
 	src, err := c.probe(probeCtx, inPath)
@@ -189,7 +192,10 @@ func (c AVConverter) exec(ctx context.Context, name string, args ...string) ([]b
 	if c.run != nil {
 		return c.run(ctx, name, args...)
 	}
-	return runCommand(ctx, engineEnv(""), name, args...)
+	if !c.sandbox.confines() {
+		return runCommand(ctx, engineEnv(""), name, args...)
+	}
+	return c.jobExec(c.workDir).run(ctx, name, args...)
 }
 
 func (c AVConverter) threadCount() int {
