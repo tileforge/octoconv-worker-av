@@ -377,8 +377,15 @@ func TestConvertRejectsAnEmptyOutput(t *testing.T) {
 	}
 }
 
-func TestGoSourcesDoNotNameLandlock(t *testing.T) {
+func TestLandlockIsNamedOnlyByTheSandbox(t *testing.T) {
 	root := filepath.Join("..", "..")
+	allowed := map[string]bool{
+		"cmd/av-worker/main.go":                true,
+		"internal/convert/av.go":               true,
+		"internal/convert/avsandbox.go":        true,
+		"internal/convert/sandboxexec.go":      true,
+		"internal/convert/sandboxpreflight.go": true,
+	}
 	err := filepath.WalkDir(root, func(path string, entry os.DirEntry, err error) error {
 		if err != nil {
 			return err
@@ -386,12 +393,20 @@ func TestGoSourcesDoNotNameLandlock(t *testing.T) {
 		if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".go") || strings.HasSuffix(entry.Name(), "_test.go") {
 			return nil
 		}
+		rel, err := filepath.Rel(root, path)
+		if err != nil {
+			return err
+		}
+		rel = filepath.ToSlash(rel)
+		if strings.HasPrefix(rel, "internal/sandbox/") || allowed[rel] {
+			return nil
+		}
 		body, err := os.ReadFile(path)
 		if err != nil {
 			return err
 		}
 		if bytes.Contains(bytes.ToLower(body), []byte("landlock")) {
-			t.Fatalf("%s names landlock", path)
+			t.Fatalf("%s names landlock", rel)
 		}
 		return nil
 	})

@@ -8,13 +8,20 @@ import (
 	"os"
 	"os/signal"
 	"strconv"
+	"strings"
 	"syscall"
 	"time"
 
 	"github.com/tileforge/octoconv-worker-av/internal/convert"
+	"github.com/tileforge/octoconv-worker-av/internal/sandbox"
 )
 
+const avSandboxDisabledEnv = "AV_SANDBOX_DISABLED"
+
 func main() {
+	if sandbox.RunExecModeIfRequested(os.Args) {
+		return
+	}
 	if err := refuseLegacyStores(); err != nil {
 		log.Fatalf("av protocol: %v", err)
 	}
@@ -27,6 +34,32 @@ func main() {
 	}
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
+
+	sandboxHelper, err := sandbox.ResolveHelper(avSandboxDisabledEnv)
+	if err != nil {
+		log.Fatalf("av sandbox: %v", err)
+	}
+	conv := convert.AVConverter{}.WithSandbox(sandboxHelper)
+	convert.Default.Register(conv)
+	if len(sandboxHelper) == 0 {
+		log.Printf("%s=true: the engine can read every file in this container", avSandboxDisabledEnv)
+	} else {
+		log.Printf("av sandbox: landlock via %s", strings.Join(sandboxHelper, " "))
+		if err := convert.StabilizeTempDir(); err != nil {
+			log.Fatalf("av sandbox: %v", err)
+		}
+	}
+
+	preflightCtx, cancelPreflight := context.WithTimeout(ctx, 60*time.Second)
+	proof, err := convert.AVPreflight(preflightCtx, conv)
+	cancelPreflight()
+	if err != nil {
+		log.Fatalf("av sandbox preflight: %v", err)
+	}
+	if len(sandboxHelper) > 0 {
+		log.Printf("av sandbox proven: ffmpeg and ffprobe ran inside the job directory and were denied a file outside every grant (output %d bytes, no outside output)", proof.OutputBytes)
+	}
+
 	dial, err := loadProtocolDial()
 	if err != nil {
 		log.Fatalf("av protocol: %v", err)
