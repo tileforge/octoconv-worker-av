@@ -174,7 +174,7 @@ func avApplicability(target string, o avOpts) error {
 			return fmt.Errorf("av: unsupported option")
 		}
 	case "webm":
-		if o.timecode != nil || o.codec == "hevc" {
+		if o.timecode != nil || o.codec != "" {
 			return fmt.Errorf("av: unsupported option")
 		}
 	default:

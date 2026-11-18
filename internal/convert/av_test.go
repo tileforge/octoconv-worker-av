@@ -157,6 +157,10 @@ func TestConvertRejectsIllegalOptionsBeforeExec(t *testing.T) {
 	if err == nil || !strings.Contains(err.Error(), "unsupported option") {
 		t.Fatal(err)
 	}
+	err = c.Convert(context.Background(), "in.mp4", filepath.Join(t.TempDir(), "out.webm"), map[string]any{"codec": "h264"})
+	if err == nil || !strings.Contains(err.Error(), "unsupported option") {
+		t.Fatal(err)
+	}
 	err = c.Convert(context.Background(), "in.mp4", filepath.Join(t.TempDir(), "out.mp3"), map[string]any{"timecode": 0})
 	if err == nil || !strings.Contains(err.Error(), "unsupported option") {
 		t.Fatal(err)
