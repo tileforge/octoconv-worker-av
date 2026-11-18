@@ -32,7 +32,13 @@ const (
 	avDefaultThumbnailTimecode  = 1.0
 	avProbeTimeout              = 15 * time.Second
 	x264DefaultCRF              = 23
+	x265DefaultCRF              = 28
 	maxSaneDurationSeconds      = 1 << 31
+)
+
+var (
+	avResolutionHeights = map[int]bool{480: true, 720: true, 1080: true}
+	avCodecAllowlist    = map[string]bool{"h264": true, "hevc": true}
 )
 
 var (
@@ -70,18 +76,21 @@ func (AVConverter) Pairs() []Pair {
 	return pairs
 }
 
-// Convert runs one empty-options av pair. A non-empty opts map is refused
-// before ffprobe or ffmpeg runs: timecode, resolution_height, and codec are
-// not on a protocol assignment.
+// Convert runs one av pair. timecode, resolution_height, and codec are the
+// closed parameter set. An unknown key fails before ffprobe or ffmpeg runs.
 func (c AVConverter) Convert(ctx context.Context, inPath, outPath string, opts map[string]any) error {
-	if len(opts) != 0 {
-		return fmt.Errorf("av: unsupported option")
+	o, err := avOptsFromMap(opts)
+	if err != nil {
+		return err
 	}
 	target := NormalizeFormat(filepath.Ext(outPath))
 	switch target {
 	case "mp4", "webm", "mp3", "wav", "m4a", "jpg", "png", "webp":
 	default:
 		return fmt.Errorf("av: unsupported target format %q", target)
+	}
+	if err := avApplicability(target, o); err != nil {
+		return err
 	}
 	probeCtx, cancel := context.WithTimeout(ctx, avProbeTimeout)
 	defer cancel()
@@ -97,12 +106,83 @@ func (c AVConverter) Convert(ctx context.Context, inPath, outPath string, opts m
 	}
 	switch target {
 	case "mp4", "webm":
-		return c.transcode(ctx, inPath, outPath, target, src)
+		return c.transcode(ctx, inPath, outPath, target, o, src)
 	case "mp3", "wav", "m4a":
 		return c.extractAudio(ctx, inPath, outPath, target, src)
 	default:
-		return c.thumbnail(ctx, inPath, outPath, target, src)
+		return c.thumbnail(ctx, inPath, outPath, target, o, src)
 	}
+}
+
+type avOpts struct {
+	timecode         *float64
+	resolutionHeight int
+	codec            string
+}
+
+func avOptsFromMap(m map[string]any) (avOpts, error) {
+	var o avOpts
+	for k, v := range m {
+		switch k {
+		case "timecode":
+			n, ok := avNumber(v)
+			if !ok || n < 0 {
+				return avOpts{}, fmt.Errorf("av: unsupported option")
+			}
+			o.timecode = &n
+		case "resolution_height":
+			n, ok := avNumber(v)
+			if !ok || n != math.Trunc(n) || n < 0 || n > 1080 || !avResolutionHeights[int(n)] {
+				return avOpts{}, fmt.Errorf("av: unsupported option")
+			}
+			o.resolutionHeight = int(n)
+		case "codec":
+			s, ok := v.(string)
+			if !ok || !avCodecAllowlist[s] {
+				return avOpts{}, fmt.Errorf("av: unsupported option")
+			}
+			o.codec = s
+		default:
+			return avOpts{}, fmt.Errorf("av: unsupported option")
+		}
+	}
+	return o, nil
+}
+
+func avNumber(v any) (float64, bool) {
+	switch n := v.(type) {
+	case float64:
+		if math.IsNaN(n) || math.IsInf(n, 0) {
+			return 0, false
+		}
+		return n, true
+	case int:
+		return float64(n), true
+	default:
+		return 0, false
+	}
+}
+
+func avApplicability(target string, o avOpts) error {
+	switch target {
+	case "jpg", "png", "webp":
+		if o.resolutionHeight != 0 || o.codec != "" {
+			return fmt.Errorf("av: unsupported option")
+		}
+	case "mp4":
+		if o.timecode != nil {
+			return fmt.Errorf("av: unsupported option")
+		}
+	case "webm":
+		if o.timecode != nil || o.codec != "" {
+			return fmt.Errorf("av: unsupported option")
+		}
+	default:
+		if o.timecode != nil || o.resolutionHeight != 0 || o.codec != "" {
+			return fmt.Errorf("av: unsupported option")
+		}
+	}
+	return nil
 }
 
 func (c AVConverter) exec(ctx context.Context, name string, args ...string) ([]byte, error) {
@@ -301,6 +381,19 @@ func streamCopyLegal(target, videoCodec, audioCodec string) bool {
 	}
 }
 
+func streamCopyEligible(target string, o avOpts, src avSource) bool {
+	if !streamCopyLegal(target, src.primary.codec, src.audioCodec) {
+		return false
+	}
+	if o.resolutionHeight != 0 {
+		return false
+	}
+	if o.codec != "" && o.codec != src.primary.codec {
+		return false
+	}
+	return true
+}
+
 func streamCopyArgs(inPath, outPath, target string, videoIndex int) []string {
 	args := append(avInputArgs(inPath),
 		"-map", "0:"+strconv.Itoa(videoIndex), "-map", "0:a:0",
@@ -312,13 +405,22 @@ func streamCopyArgs(inPath, outPath, target string, videoIndex int) []string {
 	return append(args, "file:"+outPath)
 }
 
-func transcodeArgs(inPath, outPath, target string, videoIndex, threads int) []string {
+func transcodeArgs(inPath, outPath, target, codec string, height, videoIndex, threads int) []string {
 	args := append(avInputArgs(inPath),
 		"-map", "0:"+strconv.Itoa(videoIndex), "-map", "0:a:0?")
+	if height != 0 {
+		args = append(args, "-vf", "scale=-2:"+strconv.Itoa(height))
+	}
 	switch target {
 	case "mp4":
+		videoCodec := "libx264"
+		crf := x264DefaultCRF
+		if codec == "hevc" {
+			videoCodec = "libx265"
+			crf = x265DefaultCRF
+		}
 		args = append(args,
-			"-c:v", "libx264", "-preset", "veryfast", "-crf", strconv.Itoa(x264DefaultCRF),
+			"-c:v", videoCodec, "-preset", "veryfast", "-crf", strconv.Itoa(crf),
 			"-c:a", "aac", "-b:a", "128k",
 			"-movflags", "+faststart",
 		)
@@ -374,15 +476,15 @@ func thumbnailArgs(inPath, outPath, target string, timecode float64, videoIndex 
 	return append(args, "file:"+outPath)
 }
 
-func (c AVConverter) transcode(ctx context.Context, inPath, outPath, target string, src avSource) error {
+func (c AVConverter) transcode(ctx context.Context, inPath, outPath, target string, o avOpts, src avSource) error {
 	var args []string
-	if streamCopyLegal(target, src.primary.codec, src.audioCodec) {
+	if streamCopyEligible(target, o, src) {
 		args = streamCopyArgs(inPath, outPath, target, src.primary.index)
 	} else {
 		if err := enforceReencodeBound(src.primary.width, src.primary.height); err != nil {
 			return fmt.Errorf("av: %w", err)
 		}
-		args = transcodeArgs(inPath, outPath, target, src.primary.index, c.threadCount())
+		args = transcodeArgs(inPath, outPath, target, o.codec, o.resolutionHeight, src.primary.index, c.threadCount())
 		if args == nil {
 			return fmt.Errorf("av: unsupported transcode target %q", target)
 		}
@@ -404,9 +506,17 @@ func (c AVConverter) extractAudio(ctx context.Context, inPath, outPath, target s
 	return validateAVOutput(outPath, target)
 }
 
-func (c AVConverter) thumbnail(ctx context.Context, inPath, outPath, target string, src avSource) error {
+func (c AVConverter) thumbnail(ctx context.Context, inPath, outPath, target string, o avOpts, src avSource) error {
 	seconds := src.duration.Seconds()
-	timecode := math.Min(avDefaultThumbnailTimecode, seconds/2)
+	var timecode float64
+	if o.timecode != nil {
+		timecode = *o.timecode
+		if timecode >= seconds {
+			return fmt.Errorf("av: timecode exceeds source duration")
+		}
+	} else {
+		timecode = math.Min(avDefaultThumbnailTimecode, seconds/2)
+	}
 	args := thumbnailArgs(inPath, outPath, target, timecode, src.primary.index)
 	if args == nil {
 		return fmt.Errorf("av: unsupported thumbnail target %q", target)
