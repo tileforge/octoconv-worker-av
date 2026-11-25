@@ -200,6 +200,40 @@ func TestAVRenderLetterbox(t *testing.T) {
 	}
 }
 
+func TestAVRenderSampleAspect(t *testing.T) {
+	dir := t.TempDir()
+	src := filepath.Join(dir, "wide.mp4")
+	cmd := exec.Command("ffmpeg", "-y", "-f", "lavfi", "-i", "color=c=red:s=720x576:r=1", "-vf", "setsar=16/15", "-t", "3", "-c:v", "png", src)
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("anamorphic source: %v\n%s", err, out)
+	}
+	outPath := filepath.Join(dir, "out.png")
+	if err := (AVRenderConverter{}).Convert(context.Background(), src, outPath, map[string]any{"size": 256}); err != nil {
+		t.Fatal(err)
+	}
+	img := decodePNG(t, outPath)
+	if img.Bounds().Dx() != 256 || img.Bounds().Dy() != 256 {
+		t.Fatalf("canvas %v", img.Bounds())
+	}
+	x, y, w, h := nonWhiteBox(img)
+	if x != 0 || y != 32 || w != 256 || h != 192 {
+		t.Fatalf("box (%d,%d) %dx%d", x, y, w, h)
+	}
+	assertCornersWhite(t, img)
+	if whiteAt(img, img.Bounds().Dx()/2, img.Bounds().Dy()/2) {
+		t.Fatal("center is white")
+	}
+	probe := exec.Command("ffprobe", "-v", "error", "-select_streams", "v:0", "-show_entries", "stream=sample_aspect_ratio", "-of", "default=nw=1:nk=1", outPath)
+	raw, err := probe.Output()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.TrimSpace(string(raw)) != "1:1" {
+		t.Fatalf("sar %q", raw)
+	}
+}
+
 func TestAVRenderUnserved(t *testing.T) {
 	for _, pair := range []Pair{
 		{From: "gif", To: "png"},

@@ -158,5 +158,6 @@ func avRenderSizeInt(raw any) (int, error) {
 
 func avRenderFilter(edge int) string {
 	e := strconv.Itoa(edge)
-	return "scale=w='if(gt(iw,ih)," + e + ",if(gt(ih,iw),trunc(iw*" + e + "/ih)," + e + "))':h='if(gt(ih,iw)," + e + ",if(gt(iw,ih),trunc(ih*" + e + "/iw)," + e + "))':flags=lanczos,pad=w=" + e + ":h=" + e + ":x='(ow-iw)/2':y='(oh-ih)/2':color=white"
+	// iw and ih are coded pixels. scale preserves display aspect by setting a non-1 SAR.
+	return "scale=w='if(gt(iw*sar,ih)," + e + ",if(gt(ih,iw*sar),trunc(iw*sar*" + e + "/ih)," + e + "))':h='if(gt(ih,iw*sar)," + e + ",if(gt(iw*sar,ih),trunc(ih*" + e + "/(iw*sar))," + e + "))':flags=lanczos,setsar=1,pad=w=" + e + ":h=" + e + ":x='(ow-iw)/2':y='(oh-ih)/2':color=white"
 }
