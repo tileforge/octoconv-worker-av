@@ -10,6 +10,7 @@ import (
 const (
 	EngineAV                   = "av"
 	OperationConvert           = "convert"
+	OperationRender            = "render"
 	DefaultEngineTimeout       = 753 * time.Second
 	MaxFileBytes         int64 = 2 << 30
 )
@@ -71,11 +72,25 @@ func NewRegistry() *Registry {
 	return &Registry{m: make(map[opKey]Converter)}
 }
 
+type operationalConverter interface {
+	Operation() string
+}
+
+func operationOf(c Converter) string {
+	if op, ok := c.(operationalConverter); ok {
+		if name := op.Operation(); name != "" {
+			return name
+		}
+	}
+	return OperationConvert
+}
+
 // Register indexes each pair c reports.
 func (r *Registry) Register(c Converter) {
+	op := operationOf(c)
 	for _, pair := range c.Pairs() {
 		r.m[opKey{
-			Operation: OperationConvert,
+			Operation: op,
 			From:      NormalizeFormat(pair.From),
 			To:        NormalizeFormat(pair.To),
 		}] = c

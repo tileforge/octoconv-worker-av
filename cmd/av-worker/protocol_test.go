@@ -867,3 +867,160 @@ func TestAttemptDeadlineStopsStalledDownload(t *testing.T) {
 		t.Fatal("fail was not posted")
 	}
 }
+
+func TestAVRenderManifestOperation(t *testing.T) {
+	raw, err := os.ReadFile(filepath.Join("..", "..", "schema", "manifest-av-render.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err := manifestOperation(raw)
+	if err != nil || got != convert.OperationRender {
+		t.Fatalf("operation %q %v", got, err)
+	}
+	if _, err := manifestOperation([]byte(`{"capabilities":[{"legacy":{"operation":"render","engine":"html"}}]}`)); err == nil {
+		t.Fatal("html accepted")
+	}
+}
+
+func TestAVRenderAssignmentNilOpts(t *testing.T) {
+	var mu sync.Mutex
+	var puts []putBody
+	c := protocolTestClient(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodGet {
+			_, _ = w.Write([]byte("source"))
+			return
+		}
+		if r.Method == http.MethodPut {
+			body, err := io.ReadAll(r.Body)
+			if err != nil {
+				t.Error(err)
+				return
+			}
+			mu.Lock()
+			puts = append(puts, putBody{body: body, contentType: r.Header.Get("Content-Type")})
+			mu.Unlock()
+		}
+		w.WriteHeader(http.StatusNoContent)
+	}), nil)
+	c.fileHTTP = c.coreHTTP
+	c.operation = convert.OperationRender
+	c.engineLimit = time.Minute
+	c.leaseSeconds = 30
+	c.sessionToken = "token"
+	rec := &recordingConverter{}
+	c.lookupOp = func(op, from, to string) (convert.Converter, bool) {
+		if op != convert.OperationRender || from != "mp4" || to != "png" {
+			return nil, false
+		}
+		return rec, true
+	}
+	for _, raw := range []json.RawMessage{nil, json.RawMessage("null"), json.RawMessage("{}")} {
+		rec.opts = map[string]any{"sentinel": true}
+		mu.Lock()
+		puts = nil
+		mu.Unlock()
+		asgn := renderAssignment(c, "mp4", "png", raw)
+		if err := c.runAssignment(context.Background(), asgn, controlJSON{}); err != nil {
+			t.Fatalf("%s: %v", raw, err)
+		}
+		if rec.opts != nil {
+			t.Fatalf("%s opts %#v", raw, rec.opts)
+		}
+		mu.Lock()
+		got := append([]putBody(nil), puts...)
+		mu.Unlock()
+		if len(got) != 1 || got[0].contentType != "image/png" || !bytes.Equal(got[0].body, []byte("frame")) {
+			t.Fatalf("%s puts %+v", raw, got)
+		}
+	}
+}
+
+func TestAVRenderAssignmentParameters(t *testing.T) {
+	var mu sync.Mutex
+	var fails [][]byte
+	puts := 0
+	c := protocolTestClient(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, err := io.ReadAll(r.Body)
+		if err != nil {
+			t.Error(err)
+			return
+		}
+		if r.Method == http.MethodGet {
+			_, _ = w.Write([]byte("source"))
+			return
+		}
+		if r.Method == http.MethodPut {
+			mu.Lock()
+			puts++
+			mu.Unlock()
+		}
+		if strings.Contains(r.URL.Path, "/fail") {
+			mu.Lock()
+			fails = append(fails, append([]byte(nil), body...))
+			mu.Unlock()
+		}
+		w.WriteHeader(http.StatusNoContent)
+	}), nil)
+	c.fileHTTP = c.coreHTTP
+	c.operation = convert.OperationRender
+	c.engineLimit = time.Minute
+	c.leaseSeconds = 30
+	c.sessionToken = "token"
+	rec := &recordingConverter{opts: map[string]any{"sentinel": true}}
+	c.lookupOp = func(op, from, to string) (convert.Converter, bool) {
+		if op != convert.OperationRender || from != "mp4" || to != "png" {
+			return nil, false
+		}
+		return rec, true
+	}
+	for _, raw := range []string{
+		`{"size":256}`,
+		`{"timecode":1}`,
+		`{"resolution_height":720}`,
+		`{"codec":"h264"}`,
+	} {
+		before := len(fails)
+		asgn := renderAssignment(c, "mp4", "png", json.RawMessage(raw))
+		if err := c.runAssignment(context.Background(), asgn, controlJSON{}); err != nil {
+			t.Fatalf("%s: %v", raw, err)
+		}
+		mu.Lock()
+		got := append([][]byte(nil), fails...)
+		putCount := puts
+		mu.Unlock()
+		if putCount != 0 || len(got) != before+1 {
+			t.Fatalf("%s puts %d fails %d", raw, putCount, len(got))
+		}
+		body := got[len(got)-1]
+		if !bytes.Contains(body, []byte(`"protocol_version":2`)) || !bytes.Contains(body, []byte(`"engine_code":"engine_error"`)) || !bytes.Contains(body, []byte(`"message":"assignment"`)) {
+			t.Fatalf("%s fail body %s", raw, body)
+		}
+		if _, called := rec.opts["sentinel"]; !called {
+			t.Fatalf("%s reached the converter %#v", raw, rec.opts)
+		}
+	}
+	for _, raw := range []json.RawMessage{nil, json.RawMessage("null"), json.RawMessage("{}")} {
+		rec.opts = map[string]any{"sentinel": true}
+		asgn := renderAssignment(c, "mp4", "png", raw)
+		if err := c.runAssignment(context.Background(), asgn, controlJSON{}); err != nil {
+			t.Fatalf("%s: %v", raw, err)
+		}
+		if rec.opts != nil {
+			t.Fatalf("%s opts %#v", raw, rec.opts)
+		}
+	}
+}
+
+func renderAssignment(c *protocolClient, from, to string, parameters json.RawMessage) assignmentJSON {
+	href := c.core.String() + "/objects/" + from
+	return assignmentJSON{
+		AttemptID:       from + "-" + to,
+		AttemptToken:    "attempt-token",
+		AttemptDeadline: time.Now().Add(30 * time.Minute).Format(time.RFC3339Nano),
+		LeaseExpiresAt:  time.Now().Add(time.Hour).Format(time.RFC3339Nano),
+		Limits:          limitsJSON{MaxOutputBytes: convert.MaxFileBytes},
+		Inputs:          []fileLinkJSON{{Role: "source", Ordinal: 0, Href: href, Format: from}},
+		Outputs:         []fileLinkJSON{{Role: "primary", Ordinal: 0, Href: href, Format: to}},
+		Parameters:      parameters,
+	}
+}
