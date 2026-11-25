@@ -1,0 +1,20 @@
+{
+  "capabilities": [
+    {
+      "id": "octoconv.render.av",
+      "version": 1,
+      "legacy": {"operation": "render", "engine": "av"},
+      "client_operation": "render",
+      "inputs": [{"role": "source", "min": 1, "max": 1}],
+      "outputs": [{"role": "primary", "min": 1, "max": 1}],
+      "parameter_schema": {},
+      "formats": [
+        {"from": "mp4", "to": "png"},
+        {"from": "mov", "to": "png"},
+        {"from": "avi", "to": "png"},
+        {"from": "mkv", "to": "png"},
+        {"from": "webm", "to": "png"}
+      ]
+    }
+  ]
+}
